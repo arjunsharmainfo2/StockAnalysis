@@ -1,0 +1,9 @@
+streamlit
+pandas
+alpaca-trade-api
+yfinance
+plotly
+requests
+matplotlib
+ta
+python-dotenv
