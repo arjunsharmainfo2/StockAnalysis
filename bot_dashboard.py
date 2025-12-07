@@ -18,12 +18,14 @@ NEG_WORDS = {"miss", "fall", "drop", "loss", "cut", "downgrade", "lawsuit", "pro
 API_KEY = os.getenv("APCA_API_KEY_ID", "")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY", "")
 BASE_URL = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets/")
-api = REST(API_KEY, API_SECRET, BASE_URL)
+api = REST(API_KEY, API_SECRET, BASE_URL) if API_KEY and API_SECRET else None
 
 
 @st.cache_data(ttl=600)
 def fetch_assets():
     # Pull active US equities and group by exchange for lightweight categorization
+    if api is None:
+        return [], {}
     assets = api.list_assets(status="active", asset_class="us_equity")
     t2c = {}
     syms = []
@@ -41,6 +43,9 @@ all_tickers, ticker_to_category = fetch_assets()
 all_categories = sorted(list(set(ticker_to_category.values())))
 
 st.title("Trading Bot Dashboard")
+
+if not API_KEY or not API_SECRET:
+    st.warning("Alpaca API credentials not set. Viewing data-only mode. Set APCA_API_KEY_ID and APCA_API_SECRET_KEY in environment/Streamlit secrets to enable live data and trading.")
 
 # --- Auto-Trade Universe Selection and Controls ---
 st.subheader("Ticker Selection")
@@ -81,6 +86,8 @@ filtered_by_volatility = tickers_for_trade
 if use_volatility_filter and tickers_for_trade:
     with st.spinner("Filtering by volatility (ATR)..."):
         try:
+            if not API_KEY or not API_SECRET:
+                raise ValueError("Missing Alpaca API credentials for volatility filter.")
             finder = InvestmentFinderSystem(
                 api_key=API_KEY,
                 api_secret=API_SECRET,
@@ -222,6 +229,8 @@ st.caption(f"Analyzing {len(selected_symbols)} tickers for trends and signals.")
 def get_trend_data(symbol, _timeframe=TimeFrame.Day, limit=30, ma1=10, ma2=20):
     """Fetches bar data and calculates MAs for trend analysis. Cached for 10 minutes.
     Note: _timeframe is excluded from cache hash (prefixed with underscore)."""
+    if api is None:
+        return None
     try:
         df = api.get_bars(symbol, _timeframe, limit=limit).df
         if df.empty:
@@ -357,6 +366,8 @@ def calculate_position_size(entry_price, symbol, risk_percent=0.01, max_risk_atr
     where ATR is 14-day Average True Range and acts as the per-share risk proxy.
     """
     try:
+        if api is None:
+            return 0
         account = api.get_account()
         portfolio_equity = float(getattr(account, "equity", 0))
         if portfolio_equity <= 0 or entry_price <= 0:
@@ -512,7 +523,7 @@ def process_stock(symbol, qty=1):
         signal = "HOLD"
 
     try:
-        position_qty = int(api.get_position(symbol).qty)
+        position_qty = int(api.get_position(symbol).qty) if api is not None else 0
     except:
         position_qty = 0
 
@@ -527,18 +538,20 @@ def process_stock(symbol, qty=1):
             else:
                 stop_loss_price = entry_price * 0.98  # 2% below latest close
                 take_profit_price = entry_price * 1.04  # 4% above latest close
-                api.submit_order(
-                    symbol=symbol,
-                    qty=qty_to_trade,
-                    side="buy",
-                    type="market",
-                    time_in_force="gtc",
-                    order_class="bracket",
-                    take_profit=dict(limit_price=round(take_profit_price, 2)),
-                    stop_loss=dict(stop_price=round(stop_loss_price, 2))
-                )
+                if api is not None:
+                    api.submit_order(
+                        symbol=symbol,
+                        qty=qty_to_trade,
+                        side="buy",
+                        type="market",
+                        time_in_force="gtc",
+                        order_class="bracket",
+                        take_profit=dict(limit_price=round(take_profit_price, 2)),
+                        stop_loss=dict(stop_price=round(stop_loss_price, 2))
+                    )
         elif signal == "SELL" and position_qty > 0:
-            api.submit_order(symbol=symbol, qty=position_qty, side="sell", type="market", time_in_force="gtc")
+            if api is not None:
+                api.submit_order(symbol=symbol, qty=position_qty, side="sell", type="market", time_in_force="gtc")
     
     # Plot minute data (new visualization for trade signal)
     with st.expander(f"Minute-Bar Signal Visualization for {symbol}"):
@@ -635,8 +648,11 @@ elif run_manual_trade and not tickers_for_trade:
 if auto_trade:
     st.subheader("Auto-Trade Running...")
     # This runs the trade execution and orders will be submitted due to the 'auto_trade' flag
-    run_trade_execution(tickers_for_trade)
-    st.write(f"Next update in **{refresh_interval} minutes**")
-    # Streamlit will rerun every refresh_interval minutes
-    time.sleep(refresh_interval * 60)
-    st.rerun() # re-run script to fetch latest data
+    if api is None:
+        st.error("Alpaca API keys are missing. Set APCA_API_KEY_ID and APCA_API_SECRET_KEY in Streamlit secrets/environment to enable trading.")
+    else:
+        run_trade_execution(tickers_for_trade)
+        st.write(f"Next update in **{refresh_interval} minutes**")
+        # Streamlit will rerun every refresh_interval minutes
+        time.sleep(refresh_interval * 60)
+        st.rerun() # re-run script to fetch latest data
