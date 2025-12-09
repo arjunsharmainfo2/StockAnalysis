@@ -553,10 +553,10 @@ def process_stock(symbol, qty=1):
             if api is not None:
                 api.submit_order(symbol=symbol, qty=position_qty, side="sell", type="market", time_in_force="gtc")
     
-    # Plot minute data (new visualization for trade signal)
-    with st.expander(f"Minute-Bar Signal Visualization for {symbol}"):
-        df_plot = get_trend_data(symbol, _timeframe=TimeFrame.Minute, limit=200, ma1=10, ma2=20)
-        plot_analysis(df_plot, symbol, "200 Min Bars")
+    # Plot minute data - Make it more visible with an option to hide
+    st.markdown(f"##### 📊 Minute-Bar Chart for {symbol}")
+    df_plot = get_trend_data(symbol, _timeframe=TimeFrame.Minute, limit=200, ma1=10, ma2=20)
+    plot_analysis(df_plot, symbol, "200 Min Bars")
 
     return {
         "Symbol": symbol,
@@ -605,32 +605,35 @@ if selected_symbols:
     # 2. Display Yahoo News, Analysis, and Plots
     st.markdown("### Fundamental Context, News, and Technical Visualizations")
     
-    plot_cols = st.columns(3) 
-    
-    for i, sym in enumerate(selected_symbols):
-        with plot_cols[i % 3]: 
-            st.markdown(f"**{sym} Analysis**")
-            
-            # Fetch Yahoo Data
-            yahoo_data = get_yahoo_analysis(sym)
-            news_data = get_news_signal(sym)
-            
-            # Display Summary Info
-            st.markdown(f"**Info:** {yahoo_data['Summary']}")
-            st.markdown(f"**Market Cap:** {yahoo_data['Market Cap']}")
-            st.markdown(f"**News Signal:** {news_data.get('news_signal')} (score {news_data.get('news_score')})")
-            with st.expander("Recent News Headlines"):
-                headlines = news_data.get("headlines", [])
-                if headlines:
-                    for h in headlines:
-                        st.write(f"• {h}")
-                else:
-                    st.caption("No recent Yahoo Finance headlines returned for this symbol.")
-            
-            # Display 1M Plot below the analysis
-            with st.expander("View 30-Day Technical Chart"):
-                df = get_trend_data(sym, _timeframe=TimeFrame.Day, limit=30, ma1=10, ma2=20)
-                plot_analysis(df, sym, "30 Day Bars")
+    for sym in selected_symbols:
+        st.markdown("---")
+        st.markdown(f"## 📊 {sym} Analysis")
+        
+        # Fetch Yahoo Data
+        yahoo_data = get_yahoo_analysis(sym)
+        news_data = get_news_signal(sym)
+        
+        # Display Summary Info in columns
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown(f"**📈 Info:** {yahoo_data['Summary']}")
+            st.markdown(f"**💰 Market Cap:** {yahoo_data['Market Cap']}")
+        with col2:
+            st.markdown(f"**📰 News Signal:** {news_data.get('news_signal')} (score {news_data.get('news_score')})")
+        
+        # Display News Headlines - ALWAYS VISIBLE
+        st.markdown("#### 📰 Recent News Headlines")
+        headlines = news_data.get("headlines", [])
+        if headlines:
+            for h in headlines:
+                st.write(f"• {h}")
+        else:
+            st.caption("No recent Yahoo Finance headlines returned for this symbol.")
+        
+        # Display 30-Day Technical Chart - ALWAYS VISIBLE
+        st.markdown("#### 📈 30-Day Technical Chart")
+        df = get_trend_data(sym, _timeframe=TimeFrame.Day, limit=30, ma1=10, ma2=20)
+        plot_analysis(df, sym, "30 Day Bars")
 
 
 # ------------------------------
