@@ -45,7 +45,10 @@ all_categories = sorted(list(set(ticker_to_category.values())))
 st.title("Trading Bot Dashboard")
 
 if not API_KEY or not API_SECRET:
-    st.warning("Alpaca API credentials not set. Viewing data-only mode. Set APCA_API_KEY_ID and APCA_API_SECRET_KEY in environment/Streamlit secrets to enable live data and trading.")
+    st.error("🔐 Alpaca API credentials not set. Viewing data-only mode. Set APCA_API_KEY_ID and APCA_API_SECRET_KEY in environment/Streamlit secrets to enable live data and trading.")
+    st.info("💡 To set environment variables: export APCA_API_KEY_ID='your_key' and export APCA_API_SECRET_KEY='your_secret'")
+else:
+    st.success(f"✅ Connected to Alpaca API: {BASE_URL}")
 
 # --- Auto-Trade Universe Selection and Controls ---
 st.subheader("Ticker Selection")
@@ -147,6 +150,7 @@ def get_yahoo_analysis(symbol):
             "Market Cap": f"${market_cap:,.0f}" if isinstance(market_cap, (int, float)) else market_cap
         }
     except Exception as e:
+        st.warning(f"⚠️ Yahoo Finance data unavailable for {symbol}: {e}")
         return {
             "Summary": "Data unavailable",
             "Market Cap": "N/A"
@@ -180,9 +184,11 @@ def get_news_signal(symbol, limit=20):
                     news_items = fetched
             except Exception as e:
                 print(f"{symbol} get_news error: {e}")
+                st.info(f"ℹ️ No news available via get_news() for {symbol}")
         news_items = news_items[:limit] if news_items else []
     except Exception as e:
         print(f"{symbol} news fetch error: {e}")
+        st.warning(f"⚠️ Could not fetch news for {symbol}: {e}")
         news_items = []
 
     scores = []
@@ -230,16 +236,19 @@ def get_trend_data(symbol, _timeframe=TimeFrame.Day, limit=30, ma1=10, ma2=20):
     """Fetches bar data and calculates MAs for trend analysis. Cached for 10 minutes.
     Note: _timeframe is excluded from cache hash (prefixed with underscore)."""
     if api is None:
+        st.error(f"⚠️ Cannot fetch data for {symbol}: Alpaca API not initialized. Check API credentials.")
         return None
     try:
         df = api.get_bars(symbol, _timeframe, limit=limit).df
         if df.empty:
+            st.warning(f"⚠️ No data returned for {symbol} ({_timeframe})")
             return None
         
         df[f"ma{ma1}"] = df["close"].rolling(window=ma1).mean()
         df[f"ma{ma2}"] = df["close"].rolling(window=ma2).mean()
         return df
     except Exception as e:
+        st.error(f"❌ Error fetching data for {symbol}: {e}")
         print(f"Error fetching data for {symbol}: {e}")
         return None
 
