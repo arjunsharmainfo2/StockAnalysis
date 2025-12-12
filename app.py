@@ -181,10 +181,6 @@ def main_app():
         trade_history.show(st.session_state.user_data, st.session_state.db)
     elif page == "Settings":
         settings.show(st.session_state.user_data, st.session_state.db)
-    
-    # Auto-refresh every 60 seconds to check session timeout
-    import time
-    time.sleep(0.1)  # Small delay to prevent excessive reruns
 
 # Main execution
 if not st.session_state.logged_in:
