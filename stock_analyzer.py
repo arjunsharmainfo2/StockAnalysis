@@ -37,23 +37,25 @@ class StockAnalyzer:
         Returns: {'current_eps': float, 'yoy_growth': float, 'meets_criteria': bool}
         """
         try:
-            # Get quarterly earnings
-            earnings = self.ticker.quarterly_earnings
-            if earnings is None or len(earnings) < 5:
-                return {'current_eps': None, 'yoy_growth': None, 'meets_criteria': False, 'error': 'Insufficient data'}
-            
-            # Compare most recent quarter with same quarter last year (4 quarters ago)
-            current_eps = earnings.iloc[0]['Earnings'] if 'Earnings' in earnings.columns else None
-            year_ago_eps = earnings.iloc[4]['Earnings'] if len(earnings) > 4 and 'Earnings' in earnings.columns else None
-            
-            if current_eps and year_ago_eps and year_ago_eps != 0:
-                yoy_growth = ((current_eps - year_ago_eps) / abs(year_ago_eps)) * 100
-                return {
-                    'current_eps': current_eps,
-                    'year_ago_eps': year_ago_eps,
-                    'yoy_growth': yoy_growth,
-                    'meets_criteria': yoy_growth >= 25.0
-                }
+            # Try to get quarterly income statement for Net Income
+            quarterly_income = self.ticker.quarterly_income_stmt
+            if quarterly_income is not None and not quarterly_income.empty and len(quarterly_income.columns) >= 5:
+                # Look for Net Income row
+                if 'Net Income' in quarterly_income.index:
+                    net_income = quarterly_income.loc['Net Income']
+                    
+                    # Get most recent and year-ago quarters
+                    current_ni = net_income.iloc[0] if len(net_income) > 0 else None
+                    year_ago_ni = net_income.iloc[4] if len(net_income) > 4 else None
+                    
+                    if current_ni and year_ago_ni and year_ago_ni != 0:
+                        yoy_growth = ((current_ni - year_ago_ni) / abs(year_ago_ni)) * 100
+                        return {
+                            'current_eps': current_ni,
+                            'year_ago_eps': year_ago_ni,
+                            'yoy_growth': yoy_growth,
+                            'meets_criteria': yoy_growth >= 25.0
+                        }
         except Exception as e:
             pass
         
@@ -79,14 +81,14 @@ class StockAnalyzer:
         Check 3-year earnings growth history - target >25% per year
         """
         try:
-            # Get annual earnings
-            financials = self.ticker.financials
-            if financials is None or len(financials.columns) < 3:
+            # Get annual income statement
+            income_stmt = self.ticker.income_stmt
+            if income_stmt is None or income_stmt.empty or len(income_stmt.columns) < 3:
                 return {'avg_growth': None, 'meets_criteria': False}
             
-            # Get net income for past 3 years
-            if 'Net Income' in financials.index:
-                net_income = financials.loc['Net Income']
+            # Get net income for past years
+            if 'Net Income' in income_stmt.index:
+                net_income = income_stmt.loc['Net Income']
                 if len(net_income) >= 3:
                     # Calculate year-over-year growth rates
                     growth_rates = []
@@ -186,25 +188,32 @@ class StockAnalyzer:
         Calculate 50-day and 200-day moving averages
         Check for Golden Cross
         """
-        if self.data is None or len(self.data) < 200:
+        if self.data is None or len(self.data) < 50:
             return {'meets_criteria': False}
         
         try:
             current_price = self.data['Close'].iloc[-1]
             
-            # Calculate MAs
-            ma_50 = self.data['Close'].rolling(window=50).mean().iloc[-1]
-            ma_200 = self.data['Close'].rolling(window=200).mean().iloc[-1]
+            # Calculate MAs only if we have enough data
+            ma_50 = self.data['Close'].rolling(window=50).mean().iloc[-1] if len(self.data) >= 50 else None
+            ma_200 = self.data['Close'].rolling(window=200).mean().iloc[-1] if len(self.data) >= 200 else None
             
             # Check previous day's MAs for Golden Cross
-            ma_50_prev = self.data['Close'].rolling(window=50).mean().iloc[-2] if len(self.data) > 1 else ma_50
-            ma_200_prev = self.data['Close'].rolling(window=200).mean().iloc[-2] if len(self.data) > 1 else ma_200
+            ma_50_prev = self.data['Close'].rolling(window=50).mean().iloc[-2] if len(self.data) > 50 else None
+            ma_200_prev = self.data['Close'].rolling(window=200).mean().iloc[-2] if len(self.data) > 200 else None
             
-            # Golden Cross: 50-day crosses above 200-day
-            golden_cross = (ma_50 > ma_200) and (ma_50_prev <= ma_200_prev)
+            # Golden Cross: 50-day crosses above 200-day (only if both exist)
+            golden_cross = False
+            if ma_50 is not None and ma_200 is not None and ma_50_prev is not None and ma_200_prev is not None:
+                golden_cross = (ma_50 > ma_200) and (ma_50_prev <= ma_200_prev)
             
-            above_50 = current_price > ma_50
-            above_200 = current_price > ma_200
+            # Check if price is above MAs
+            above_50 = current_price > ma_50 if ma_50 is not None else False
+            above_200 = current_price > ma_200 if ma_200 is not None else False
+            
+            # Distance calculations
+            distance_from_50 = ((current_price - ma_50) / ma_50) * 100 if ma_50 is not None and ma_50 != 0 else None
+            distance_from_200 = ((current_price - ma_200) / ma_200) * 100 if ma_200 is not None and ma_200 != 0 else None
             
             return {
                 'current_price': current_price,
@@ -213,12 +222,12 @@ class StockAnalyzer:
                 'above_50': above_50,
                 'above_200': above_200,
                 'golden_cross': golden_cross,
-                'distance_from_50': ((current_price - ma_50) / ma_50) * 100,
-                'distance_from_200': ((current_price - ma_200) / ma_200) * 100,
+                'distance_from_50': distance_from_50,
+                'distance_from_200': distance_from_200,
                 'meets_criteria': above_50 and above_200
             }
-        except Exception:
-            return {'meets_criteria': False}
+        except Exception as e:
+            return {'meets_criteria': False, 'error': str(e)}
     
     def calculate_relative_strength(self) -> Dict:
         """
@@ -283,6 +292,10 @@ class StockAnalyzer:
             avg_volume = self.data['Volume'].rolling(window=50).mean().iloc[-1]
             recent_volume = self.data['Volume'].iloc[-1]
             
+            # Check for None values
+            if avg_volume is None or recent_volume is None or avg_volume == 0:
+                return {'meets_criteria': False}
+            
             volume_increase_pct = ((recent_volume - avg_volume) / avg_volume) * 100
             
             return {
@@ -292,8 +305,8 @@ class StockAnalyzer:
                 'breakout': volume_increase_pct >= 40,
                 'meets_criteria': volume_increase_pct >= 40
             }
-        except Exception:
-            return {'meets_criteria': False}
+        except Exception as e:
+            return {'meets_criteria': False, 'error': str(e)}
     
     def check_market_trend(self) -> Dict:
         """
@@ -303,15 +316,19 @@ class StockAnalyzer:
             spy = yf.Ticker('SPY')
             spy_data = spy.history(period='6mo')
             
-            if spy_data.empty:
+            if spy_data.empty or len(spy_data) < 50:
                 return {'uptrend': None, 'meets_criteria': False}
             
             # Calculate SPY moving averages
-            spy_ma_50 = spy_data['Close'].rolling(window=50).mean().iloc[-1]
+            spy_ma_50 = spy_data['Close'].rolling(window=50).mean().iloc[-1] if len(spy_data) >= 50 else None
             spy_ma_200 = spy_data['Close'].rolling(window=200).mean().iloc[-1] if len(spy_data) >= 200 else None
             spy_price = spy_data['Close'].iloc[-1]
             
-            if spy_ma_200:
+            # Check for None values
+            if spy_price is None or spy_ma_50 is None:
+                return {'uptrend': None, 'meets_criteria': False}
+            
+            if spy_ma_200 is not None:
                 uptrend = spy_price > spy_ma_50 and spy_price > spy_ma_200 and spy_ma_50 > spy_ma_200
             else:
                 uptrend = spy_price > spy_ma_50
@@ -323,8 +340,8 @@ class StockAnalyzer:
                 'uptrend': uptrend,
                 'meets_criteria': uptrend
             }
-        except Exception:
-            return {'uptrend': None, 'meets_criteria': False}
+        except Exception as e:
+            return {'uptrend': None, 'meets_criteria': False, 'error': str(e)}
     
     # ============= DECISION ENGINE =============
     
