@@ -128,8 +128,39 @@ run_manual_trade = st.button("Run Manual Trade Check & Execute")
 st.markdown("---")
 
 # ------------------------------
-# NEW: Yahoo Finance Analysis Function
+# Yahoo Finance Analysis Functions
 # ------------------------------
+@st.cache_data(ttl=600)
+def get_yahoo_week_data(symbol):
+    """Fetch 1-week historical data from Yahoo Finance with technical indicators."""
+    try:
+        ticker = yf.Ticker(symbol)
+        # Get 1 week of data (5 trading days) with 1-day interval
+        hist = ticker.history(period="1mo", interval="1d")
+        
+        if hist.empty:
+            return None
+        
+        # Calculate technical indicators
+        hist['MA5'] = hist['Close'].rolling(window=5).mean()
+        hist['MA10'] = hist['Close'].rolling(window=10).mean()
+        hist['MA20'] = hist['Close'].rolling(window=20).mean()
+        
+        # Calculate RSI
+        delta = hist['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        hist['RSI'] = 100 - (100 / (1 + rs))
+        
+        # Volume analysis
+        hist['Volume_MA'] = hist['Volume'].rolling(window=5).mean()
+        
+        return hist
+    except Exception as e:
+        st.error(f"❌ Error fetching Yahoo 1-week data for {symbol}: {e}")
+        return None
+
 @st.cache_data(ttl=600)
 def get_yahoo_analysis(symbol):
     """Fetches price info and basic data from Yahoo Finance. Cached for 10 minutes."""
@@ -142,18 +173,21 @@ def get_yahoo_analysis(symbol):
         market_cap = info.get('marketCap', 'N/A')
         fifty_two_week_high = info.get('fiftyTwoWeekHigh', 'N/A')
         fifty_two_week_low = info.get('fiftyTwoWeekLow', 'N/A')
+        current_price = info.get('currentPrice', info.get('regularMarketPrice', 'N/A'))
         
         summary = f"PE: {pe_ratio} | 52W High: ${fifty_two_week_high} | 52W Low: ${fifty_two_week_low}"
         
         return {
             "Summary": summary,
-            "Market Cap": f"${market_cap:,.0f}" if isinstance(market_cap, (int, float)) else market_cap
+            "Market Cap": f"${market_cap:,.0f}" if isinstance(market_cap, (int, float)) else market_cap,
+            "Current Price": current_price
         }
     except Exception as e:
         st.warning(f"⚠️ Yahoo Finance data unavailable for {symbol}: {e}")
         return {
             "Summary": "Data unavailable",
-            "Market Cap": "N/A"
+            "Market Cap": "N/A",
+            "Current Price": "N/A"
         }
 
 
@@ -193,15 +227,29 @@ def get_news_signal(symbol, limit=20):
 
     scores = []
     headlines = []
+    news_details = []
+    
     for item in news_items:
         title = item.get("title") or ""
         if not title:
             continue
+        
+        # Extract full news details
+        link = item.get("link", "")
+        publisher = item.get("publisher", "Unknown")
+        published_time = item.get("providerPublishTime", "")
+        
         headlines.append(title)
+        news_details.append({
+            "title": title,
+            "publisher": publisher,
+            "link": link,
+            "time": pd.to_datetime(published_time, unit='s').strftime('%Y-%m-%d %H:%M') if published_time else "N/A"
+        })
         scores.append(_score_headline(title))
 
     if not scores:
-        return {"symbol": symbol, "news_signal": "HOLD", "news_score": 0.0, "headlines": [], "empty": True}
+        return {"symbol": symbol, "news_signal": "HOLD", "news_score": 0.0, "headlines": [], "news_details": [], "empty": True}
 
     avg = sum(scores) / len(scores)
     if avg > 0.5:
@@ -216,17 +264,139 @@ def get_news_signal(symbol, limit=20):
         "news_signal": signal,
         "news_score": round(avg, 2),
         "headlines": headlines[:5],
+        "news_details": news_details[:10],  # Return top 10 news items with full details
         "empty": False,
     }
 
 # ------------------------------
-# 1M trend analysis UI
+# 1-Week Analysis with Yahoo Finance
 # ------------------------------
-st.subheader("1M Trend Analysis")
+st.subheader("📊 1-Week Stock Analysis & Trading Signals")
 
 # Use the same tickers from main input for analysis
 selected_symbols = tickers_for_trade if tickers_for_trade else []
-st.caption(f"Analyzing {len(selected_symbols)} tickers for trends and signals.")
+st.caption(f"Analyzing {len(selected_symbols)} tickers using Yahoo Finance 1-week data + news sentiment")
+
+
+# --- Comprehensive 1-week analysis function ---
+@st.cache_data(ttl=300)
+def analyze_stock_1week(symbol):
+    """
+    Comprehensive 1-week analysis combining:
+    - Yahoo Finance 1-week price data and technical indicators
+    - News sentiment analysis
+    - Buy/Sell recommendation
+    """
+    # Get 1-week data from Yahoo Finance
+    week_data = get_yahoo_week_data(symbol)
+    
+    if week_data is None or len(week_data) < 5:
+        return {
+            "Symbol": symbol,
+            "Signal": "NO DATA",
+            "Price": "N/A",
+            "Week_Change_%": 0,
+            "RSI": "N/A",
+            "Recommendation": "INSUFFICIENT DATA"
+        }
+    
+    # Get the last 5 trading days
+    recent_data = week_data.tail(7)
+    latest = recent_data.iloc[-1]
+    week_start = recent_data.iloc[0]
+    
+    # Calculate metrics
+    current_price = latest['Close']
+    week_change_pct = ((current_price - week_start['Close']) / week_start['Close']) * 100
+    
+    ma5 = latest.get('MA5', None)
+    ma10 = latest.get('MA10', None)
+    rsi = latest.get('RSI', None)
+    volume_ratio = latest['Volume'] / latest.get('Volume_MA', 1) if latest.get('Volume_MA', 0) > 0 else 1
+    
+    # Get news sentiment
+    news_data = get_news_signal(symbol)
+    news_signal = news_data.get('news_signal', 'HOLD')
+    news_score = news_data.get('news_score', 0)
+    
+    # Technical signal generation
+    tech_signal = "HOLD"
+    tech_strength = 0
+    reasons = []
+    
+    # MA crossover analysis
+    if pd.notna(ma5) and pd.notna(ma10):
+        if ma5 > ma10 and current_price > ma5:
+            tech_signal = "BUY"
+            tech_strength += 2
+            reasons.append("MA5 > MA10 with price above MA5")
+        elif ma5 < ma10 and current_price < ma5:
+            tech_signal = "SELL"
+            tech_strength -= 2
+            reasons.append("MA5 < MA10 with price below MA5")
+    
+    # RSI analysis
+    if pd.notna(rsi):
+        if rsi < 30:
+            tech_strength += 1
+            reasons.append(f"RSI oversold ({rsi:.1f})")
+            if tech_signal != "SELL":
+                tech_signal = "BUY"
+        elif rsi > 70:
+            tech_strength -= 1
+            reasons.append(f"RSI overbought ({rsi:.1f})")
+            if tech_signal != "BUY":
+                tech_signal = "SELL"
+    
+    # Volume confirmation
+    if volume_ratio > 1.5:
+        tech_strength += 1 if tech_signal == "BUY" else -1
+        reasons.append(f"High volume ({volume_ratio:.1f}x avg)")
+    
+    # Week trend
+    if week_change_pct > 3:
+        tech_strength += 1
+        reasons.append(f"Strong uptrend (+{week_change_pct:.1f}%)")
+    elif week_change_pct < -3:
+        tech_strength -= 1
+        reasons.append(f"Strong downtrend ({week_change_pct:.1f}%)")
+    
+    # Combine technical + news sentiment for final recommendation
+    final_signal = tech_signal
+    confidence = "MEDIUM"
+    
+    if tech_signal == "BUY" and news_signal == "BUY":
+        final_signal = "STRONG BUY"
+        confidence = "HIGH"
+    elif tech_signal == "SELL" and news_signal == "SELL":
+        final_signal = "STRONG SELL"
+        confidence = "HIGH"
+    elif tech_signal == "BUY" and news_signal == "SELL":
+        final_signal = "HOLD"
+        confidence = "LOW"
+        reasons.append("Mixed signals: Tech=BUY, News=SELL")
+    elif tech_signal == "SELL" and news_signal == "BUY":
+        final_signal = "HOLD"
+        confidence = "LOW"
+        reasons.append("Mixed signals: Tech=SELL, News=BUY")
+    
+    return {
+        "Symbol": symbol,
+        "Price": f"${current_price:.2f}",
+        "Week_Change_%": round(week_change_pct, 2),
+        "MA5": round(ma5, 2) if pd.notna(ma5) else "N/A",
+        "MA10": round(ma10, 2) if pd.notna(ma10) else "N/A",
+        "RSI": round(rsi, 1) if pd.notna(rsi) else "N/A",
+        "Volume_Ratio": round(volume_ratio, 2),
+        "Tech_Signal": tech_signal,
+        "News_Signal": news_signal,
+        "News_Score": news_score,
+        "Final_Signal": final_signal,
+        "Confidence": confidence,
+        "Reasons": " | ".join(reasons) if reasons else "Neutral market conditions",
+        "week_data": recent_data,
+        "news_details": news_data.get('news_details', [])
+    }
 
 
 # --- Helper functions for data retrieval and plotting ---
@@ -236,11 +406,27 @@ def get_trend_data(symbol, _timeframe=TimeFrame.Day, limit=30, ma1=10, ma2=20):
     """Fetches bar data and calculates MAs for trend analysis. Cached for 10 minutes.
     Note: _timeframe is excluded from cache hash (prefixed with underscore)."""
     if api is None:
+        # Try Yahoo Finance as fallback
+        week_data = get_yahoo_week_data(symbol)
+        if week_data is not None:
+            # Normalize column names to lowercase for consistency
+            week_data.columns = [col.lower() if isinstance(col, str) else col for col in week_data.columns]
+            week_data[f"ma{ma1}"] = week_data["close"].rolling(window=ma1).mean()
+            week_data[f"ma{ma2}"] = week_data["close"].rolling(window=ma2).mean()
+            return week_data
         st.error(f"⚠️ Cannot fetch data for {symbol}: Alpaca API not initialized. Check API credentials.")
         return None
     try:
         df = api.get_bars(symbol, _timeframe, limit=limit).df
         if df.empty:
+            # Fallback to Yahoo Finance
+            week_data = get_yahoo_week_data(symbol)
+            if week_data is not None:
+                # Normalize column names to lowercase for consistency
+                week_data.columns = [col.lower() if isinstance(col, str) else col for col in week_data.columns]
+                week_data[f"ma{ma1}"] = week_data["close"].rolling(window=ma1).mean()
+                week_data[f"ma{ma2}"] = week_data["close"].rolling(window=ma2).mean()
+                return week_data
             st.warning(f"⚠️ No data returned for {symbol} ({_timeframe})")
             return None
         
@@ -248,6 +434,14 @@ def get_trend_data(symbol, _timeframe=TimeFrame.Day, limit=30, ma1=10, ma2=20):
         df[f"ma{ma2}"] = df["close"].rolling(window=ma2).mean()
         return df
     except Exception as e:
+        # Fallback to Yahoo Finance
+        week_data = get_yahoo_week_data(symbol)
+        if week_data is not None:
+            # Normalize column names to lowercase for consistency
+            week_data.columns = [col.lower() if isinstance(col, str) else col for col in week_data.columns]
+            week_data[f"ma{ma1}"] = week_data["close"].rolling(window=ma1).mean()
+            week_data[f"ma{ma2}"] = week_data["close"].rolling(window=ma2).mean()
+            return week_data
         st.error(f"❌ Error fetching data for {symbol}: {e}")
         print(f"Error fetching data for {symbol}: {e}")
         return None
@@ -266,6 +460,7 @@ def analyze_trend(symbol):
     if df is None or len(df) < 20:
         return {"Symbol": symbol, "Signal": "NO DATA"}
 
+    # Data is now normalized to lowercase by get_trend_data
     pct_change = ((df["close"].iloc[-1] / df["close"].iloc[0]) - 1) * 100
     latest = df.iloc[-1]
     
@@ -601,49 +796,234 @@ def run_trade_execution(symbols_to_process):
 
 
 if selected_symbols:
-    trend_rows = []
+    # 1. Display 1-Week Analysis Summary Table
+    st.markdown("### 📊 1-Week Analysis Summary")
+    analysis_results = []
     
-    # 1. Display summary table
-    st.markdown("### 1-Month Trend Summary Table")
     for sym in selected_symbols:
-        trend_rows.append(analyze_trend(sym))
-    st.dataframe(pd.DataFrame(trend_rows))
+        analysis = analyze_stock_1week(sym)
+        analysis_results.append(analysis)
+    
+    # Display summary table
+    summary_df = pd.DataFrame([{
+        "Symbol": a["Symbol"],
+        "Price": a["Price"],
+        "Week %": a["Week_Change_%"],
+        "RSI": a["RSI"],
+        "Tech Signal": a["Tech_Signal"],
+        "News Signal": a["News_Signal"],
+        "Final Signal": a["Final_Signal"],
+        "Confidence": a["Confidence"]
+    } for a in analysis_results])
+    
+    # Color code the signals
+    def color_signal(val):
+        if "STRONG BUY" in str(val) or "BUY" in str(val):
+            return 'background-color: #90EE90'
+        elif "STRONG SELL" in str(val) or "SELL" in str(val):
+            return 'background-color: #FFB6C1'
+        elif "HOLD" in str(val):
+            return 'background-color: #FFE4B5'
+        return ''
+    
+    styled_df = summary_df.style.applymap(color_signal, subset=['Tech Signal', 'News Signal', 'Final Signal'])
+    st.dataframe(styled_df, use_container_width=True)
 
     st.markdown("---")
 
-    # 2. Display Yahoo News, Analysis, and Plots
-    st.markdown("### Fundamental Context, News, and Technical Visualizations")
+    # 2. Detailed Analysis for Each Stock
+    st.markdown("### 📈 Detailed Stock Analysis with News & Charts")
     
-    for sym in selected_symbols:
+    for analysis in analysis_results:
+        sym = analysis["Symbol"]
         st.markdown("---")
-        st.markdown(f"## 📊 {sym} Analysis")
+        st.markdown(f"## 📊 {sym} - Detailed Analysis")
         
-        # Fetch Yahoo Data
-        yahoo_data = get_yahoo_analysis(sym)
-        news_data = get_news_signal(sym)
+        # Create three columns for key metrics
+        col1, col2, col3 = st.columns(3)
         
-        # Display Summary Info in columns
-        col1, col2 = st.columns(2)
         with col1:
-            st.markdown(f"**📈 Info:** {yahoo_data['Summary']}")
-            st.markdown(f"**💰 Market Cap:** {yahoo_data['Market Cap']}")
+            st.metric("Current Price", analysis["Price"], f"{analysis['Week_Change_%']}% (1W)")
+            st.metric("RSI", analysis["RSI"])
+        
         with col2:
-            st.markdown(f"**📰 News Signal:** {news_data.get('news_signal')} (score {news_data.get('news_score')})")
+            signal_emoji = "🟢" if "BUY" in analysis["Final_Signal"] else "🔴" if "SELL" in analysis["Final_Signal"] else "🟡"
+            st.metric("Final Signal", f"{signal_emoji} {analysis['Final_Signal']}")
+            st.metric("Confidence", analysis["Confidence"])
         
-        # Display News Headlines - ALWAYS VISIBLE
-        st.markdown("#### 📰 Recent News Headlines")
-        headlines = news_data.get("headlines", [])
-        if headlines:
-            for h in headlines:
-                st.write(f"• {h}")
+        with col3:
+            st.metric("Tech Signal", analysis["Tech_Signal"])
+            st.metric("News Signal", f"{analysis['News_Signal']} ({analysis['News_Score']})")
+        
+        # Analysis Reasoning
+        st.markdown("#### 🔍 Analysis Reasoning")
+        st.info(analysis["Reasons"])
+        
+        # 1-Week Chart with Technical Indicators
+        st.markdown("#### 📈 1-Week Price Chart (Yahoo Finance)")
+        week_data = analysis.get("week_data")
+        if week_data is not None and not week_data.empty:
+            fig = go.Figure()
+            
+            # Candlestick chart
+            fig.add_trace(go.Candlestick(
+                x=week_data.index,
+                open=week_data['Open'],
+                high=week_data['High'],
+                low=week_data['Low'],
+                close=week_data['Close'],
+                name='Price'
+            ))
+            
+            # Add MA5
+            if 'MA5' in week_data.columns:
+                fig.add_trace(go.Scatter(
+                    x=week_data.index,
+                    y=week_data['MA5'],
+                    mode='lines',
+                    name='MA5',
+                    line=dict(color='orange', width=2)
+                ))
+            
+            # Add MA10
+            if 'MA10' in week_data.columns:
+                fig.add_trace(go.Scatter(
+                    x=week_data.index,
+                    y=week_data['MA10'],
+                    mode='lines',
+                    name='MA10',
+                    line=dict(color='blue', width=2)
+                ))
+            
+            fig.update_layout(
+                title=f'{sym} - 1 Week Price Action',
+                yaxis_title='Price (USD)',
+                xaxis_title='Date',
+                height=500,
+                template='plotly_white',
+                xaxis_rangeslider_visible=False
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Volume chart
+            fig_vol = go.Figure()
+            fig_vol.add_trace(go.Bar(
+                x=week_data.index,
+                y=week_data['Volume'],
+                name='Volume',
+                marker_color='lightblue'
+            ))
+            
+            if 'Volume_MA' in week_data.columns:
+                fig_vol.add_trace(go.Scatter(
+                    x=week_data.index,
+                    y=week_data['Volume_MA'],
+                    mode='lines',
+                    name='Volume MA',
+                    line=dict(color='red', width=2)
+                ))
+            
+            fig_vol.update_layout(
+                title=f'{sym} - Trading Volume',
+                yaxis_title='Volume',
+                height=300,
+                template='plotly_white'
+            )
+            
+            st.plotly_chart(fig_vol, use_container_width=True)
         else:
-            st.caption("No recent Yahoo Finance headlines returned for this symbol.")
+            st.warning("No chart data available")
         
-        # Display 30-Day Technical Chart - ALWAYS VISIBLE
-        st.markdown("#### 📈 30-Day Technical Chart")
-        df = get_trend_data(sym, _timeframe=TimeFrame.Day, limit=30, ma1=10, ma2=20)
-        plot_analysis(df, sym, "30 Day Bars")
+        # News & Blogs Section
+        st.markdown("#### 📰 Latest News & Market Sentiment")
+        news_details = analysis.get("news_details", [])
+        
+        if news_details:
+            for i, news in enumerate(news_details, 1):
+                with st.expander(f"📰 {i}. {news['title'][:80]}..."):
+                    st.markdown(f"**Publisher:** {news['publisher']}")
+                    st.markdown(f"**Published:** {news['time']}")
+                    st.markdown(f"**Link:** [{news['title']}]({news['link']})")
+        else:
+            st.caption("No recent news available for this symbol.")
+        
+        # Execute Trade Button (if Alpaca is connected)
+        if api is not None and analysis["Final_Signal"] in ["STRONG BUY", "STRONG SELL"]:
+            st.markdown("#### 💰 Execute Trade on Alpaca")
+            
+            col_trade1, col_trade2 = st.columns([2, 1])
+            
+            with col_trade1:
+                qty_input = st.number_input(
+                    f"Quantity to trade for {sym}",
+                    min_value=1,
+                    value=10,
+                    key=f"qty_{sym}"
+                )
+            
+            with col_trade2:
+                if analysis["Final_Signal"] == "STRONG BUY":
+                    if st.button(f"🟢 BUY {sym}", key=f"buy_{sym}", type="primary"):
+                        try:
+                            # Calculate stop loss and take profit
+                            current_price = float(analysis["Price"].replace("$", ""))
+                            stop_loss = current_price * 0.95  # 5% stop loss
+                            take_profit = current_price * 1.10  # 10% take profit
+                            
+                            order = api.submit_order(
+                                symbol=sym,
+                                qty=qty_input,
+                                side="buy",
+                                type="market",
+                                time_in_force="gtc",
+                                order_class="bracket",
+                                take_profit=dict(limit_price=round(take_profit, 2)),
+                                stop_loss=dict(stop_price=round(stop_loss, 2))
+                            )
+                            st.success(f"✅ BUY order submitted for {qty_input} shares of {sym}!")
+                            st.json({
+                                "Order ID": order.id,
+                                "Symbol": sym,
+                                "Qty": qty_input,
+                                "Stop Loss": f"${stop_loss:.2f}",
+                                "Take Profit": f"${take_profit:.2f}"
+                            })
+                        except Exception as e:
+                            st.error(f"❌ Error submitting order: {e}")
+                
+                elif analysis["Final_Signal"] == "STRONG SELL":
+                    if st.button(f"🔴 SELL {sym}", key=f"sell_{sym}", type="secondary"):
+                        try:
+                            # Check if position exists
+                            try:
+                                position = api.get_position(sym)
+                                position_qty = int(position.qty)
+                                
+                                order = api.submit_order(
+                                    symbol=sym,
+                                    qty=min(qty_input, position_qty),
+                                    side="sell",
+                                    type="market",
+                                    time_in_force="gtc"
+                                )
+                                st.success(f"✅ SELL order submitted for {min(qty_input, position_qty)} shares of {sym}!")
+                                st.json({"Order ID": order.id, "Symbol": sym, "Qty": min(qty_input, position_qty)})
+                            except:
+                                st.warning(f"No position found for {sym}. Cannot sell.")
+                        except Exception as e:
+                            st.error(f"❌ Error submitting order: {e}")
 
+
+if selected_symbols:
+    trend_rows = []
+    
+    # OLD 1-Month Trend Summary Table (kept for backward compatibility)
+    with st.expander("📅 View Legacy 1-Month Trend Analysis"):
+        st.markdown("### 1-Month Trend Summary Table")
+        for sym in selected_symbols:
+            trend_rows.append(analyze_trend(sym))
+        st.dataframe(pd.DataFrame(trend_rows))
 
 # ------------------------------
 # Manual Trade Execution
