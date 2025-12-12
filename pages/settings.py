@@ -316,6 +316,7 @@ def show(user_data: Dict, db):
             # Configuration
             st.markdown("### ⚙️ Auto-Trade Settings")
             
+            st.markdown("#### Trading Strategy")
             col1, col2 = st.columns(2)
             
             with col1:
@@ -323,7 +324,7 @@ def show(user_data: Dict, db):
                     "Minimum Confidence %",
                     min_value=50,
                     max_value=95,
-                    value=70,
+                    value=int(db.get_setting(user_data['user_id'], 'auto_trade_min_confidence') or 70),
                     help="Only execute trades with this confidence level or higher"
                 )
             
@@ -332,14 +333,65 @@ def show(user_data: Dict, db):
                     "Max Position Size (%)",
                     min_value=5,
                     max_value=20,
-                    value=10,
+                    value=int(db.get_setting(user_data['user_id'], 'auto_trade_max_position_pct') or 10),
                     help="Maximum percentage of buying power to use per position"
                 )
             
-            if st.button("Save Auto-Trade Settings"):
-                db.save_setting(user_data['user_id'], 'auto_trade_min_confidence', min_confidence)
-                db.save_setting(user_data['user_id'], 'auto_trade_max_position_pct', max_position_pct)
+            st.markdown("---")
+            
+            # Daily limits
+            st.markdown("#### Daily Trading Limits")
+            st.caption("Set limits to control automated trading activity and manage risk")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                max_daily_trades = st.number_input(
+                    "Max Total Trades/Day",
+                    min_value=1,
+                    max_value=100,
+                    value=int(db.get_setting(user_data['user_id'], 'auto_trade_max_daily_trades') or 20),
+                    help="Maximum total number of trades (buys + sells) per day"
+                )
+            
+            with col2:
+                max_daily_buys = st.number_input(
+                    "Max Buys/Day",
+                    min_value=1,
+                    max_value=50,
+                    value=int(db.get_setting(user_data['user_id'], 'auto_trade_max_daily_buys') or 10),
+                    help="Maximum number of buy orders per day"
+                )
+            
+            with col3:
+                max_daily_sells = st.number_input(
+                    "Max Sells/Day",
+                    min_value=1,
+                    max_value=50,
+                    value=int(db.get_setting(user_data['user_id'], 'auto_trade_max_daily_sells') or 10),
+                    help="Maximum number of sell orders per day"
+                )
+            
+            if st.button("💾 Save Auto-Trade Settings", use_container_width=True):
+                db.save_setting(user_data['user_id'], 'auto_trade_min_confidence', str(min_confidence))
+                db.save_setting(user_data['user_id'], 'auto_trade_max_position_pct', str(max_position_pct))
+                db.save_setting(user_data['user_id'], 'auto_trade_max_daily_trades', str(max_daily_trades))
+                db.save_setting(user_data['user_id'], 'auto_trade_max_daily_buys', str(max_daily_buys))
+                db.save_setting(user_data['user_id'], 'auto_trade_max_daily_sells', str(max_daily_sells))
                 st.success("✅ Auto-trade settings saved!")
+                st.rerun()
+            
+            st.markdown("---")
+            st.info("""
+            **💡 Running Continuously:**
+            
+            To run auto-trader every 5 minutes continuously, execute in terminal:
+            ```
+            python auto_trader.py """ + str(user_data['user_id']) + """ 5
+            ```
+            
+            This will check your enabled stocks and execute trades automatically every 5 minutes.
+            """)
     
     # Footer
     st.markdown("---")
