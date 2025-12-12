@@ -472,24 +472,24 @@ def show(user_data: Dict, db):
                 
                 # Submit order
                 if trade_action == "BUY":
-                    stop_loss = analysis['current_price'] * 0.95
-                    take_profit = analysis['current_price'] * 1.10
+                    stop_loss = analysis['current_price'] * 0.92  # 8% stop loss
+                    take_profit = analysis['current_price'] * 1.10  # 10% profit target
                     
                     order = api.submit_order(
                         symbol=selected_symbol,
                         qty=quantity,
-                        side="buy",
+                        side="buy",  # Must be lowercase for Alpaca API
                         type="market",
                         time_in_force="gtc",
                         order_class="bracket",
                         take_profit=dict(limit_price=round(take_profit, 2)),
                         stop_loss=dict(stop_price=round(stop_loss, 2))
                     )
-                else:
+                else:  # SELL
                     order = api.submit_order(
                         symbol=selected_symbol,
                         qty=quantity,
-                        side="sell",
+                        side="sell",  # Must be lowercase for Alpaca API
                         type="market",
                         time_in_force="gtc"
                     )

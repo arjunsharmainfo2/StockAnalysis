@@ -12,7 +12,7 @@ def show(user_data: Dict, db):
     st.markdown("Manage your account and trading preferences")
     
     # Tabs for different settings
-    tab1, tab2, tab3 = st.tabs(["🔑 API Keys", "👤 Account", "🎨 Preferences"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🔑 API Keys", "👤 Account", "🎨 Preferences", "🤖 Auto-Trade"])
     
     with tab1:
         st.markdown("### 🔑 Alpaca API Configuration")
@@ -255,6 +255,91 @@ def show(user_data: Dict, db):
                     file_name=f"trades_{user_data['username']}.csv",
                     mime="text/csv"
                 )
+    
+    with tab4:
+        st.markdown("### 🤖 Auto-Trade Configuration")
+        st.markdown("""
+        Enable automatic trading based on CAN SLIM analysis signals.
+        
+        **How it works:**
+        - System checks your auto-enabled stocks every 15 minutes
+        - Executes trades automatically when high-confidence signals are detected
+        - Uses 10% of available buying power per position
+        - Includes automatic stop-loss (8%) and take-profit (10%)
+        """)
+        
+        # Check API keys
+        api_key, api_secret = db.get_user_api_keys(user_data['user_id'])
+        
+        if not api_key or not api_secret:
+            st.error("⚠️ API Keys not configured. Please add your Alpaca API keys in the API Keys tab first.")
+        else:
+            st.success("✅ API Keys configured")
+            
+            # Check auto-trade enabled stocks
+            watchlist = db.get_user_watchlist(user_data['user_id'])
+            auto_enabled = [w for w in watchlist if w['auto_trade_enabled']]
+            
+            st.info(f"📊 Auto-trade enabled for **{len(auto_enabled)}** stocks")
+            
+            if auto_enabled:
+                st.markdown("**Stocks with auto-trade enabled:**")
+                for stock in auto_enabled:
+                    st.markdown(f"- {stock['symbol']}")
+            
+            st.markdown("---")
+            
+            # Manual trigger
+            st.markdown("### 🎯 Manual Execution")
+            st.markdown("Run auto-trade analysis and execution now (don't wait for scheduled interval)")
+            
+            if st.button("🚀 Run Auto-Trade Now", type="primary", use_container_width=True):
+                if not auto_enabled:
+                    st.warning("No stocks enabled for auto-trading. Enable stocks in Watchlist Manager.")
+                else:
+                    with st.spinner("Running auto-trade analysis..."):
+                        try:
+                            import sys
+                            import os
+                            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                            from auto_trader import AutoTrader
+                            
+                            trader = AutoTrader(user_data['user_id'], db)
+                            trader.check_and_execute_trades()
+                            
+                            st.success("✅ Auto-trade execution completed! Check Trade History for details.")
+                        except Exception as e:
+                            st.error(f"❌ Error running auto-trader: {e}")
+            
+            st.markdown("---")
+            
+            # Configuration
+            st.markdown("### ⚙️ Auto-Trade Settings")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                min_confidence = st.slider(
+                    "Minimum Confidence %",
+                    min_value=50,
+                    max_value=95,
+                    value=70,
+                    help="Only execute trades with this confidence level or higher"
+                )
+            
+            with col2:
+                max_position_pct = st.slider(
+                    "Max Position Size (%)",
+                    min_value=5,
+                    max_value=20,
+                    value=10,
+                    help="Maximum percentage of buying power to use per position"
+                )
+            
+            if st.button("Save Auto-Trade Settings"):
+                db.save_setting(user_data['user_id'], 'auto_trade_min_confidence', min_confidence)
+                db.save_setting(user_data['user_id'], 'auto_trade_max_position_pct', max_position_pct)
+                st.success("✅ Auto-trade settings saved!")
     
     # Footer
     st.markdown("---")
