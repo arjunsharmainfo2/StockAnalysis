@@ -374,10 +374,12 @@ def show(user_data: Dict, db):
         st.plotly_chart(fig, use_container_width=True)
         
         # Volume chart
+        hist['Volume_MA'] = hist['Volume'].rolling(window=20).mean()
+        
         fig_vol = go.Figure()
         fig_vol.add_trace(go.Bar(x=hist.index, y=hist['Volume'], name='Volume'))
         fig_vol.add_trace(go.Scatter(x=hist.index, y=hist['Volume_MA'], 
-                                     name='Volume MA', line=dict(color='red', width=2)))
+                                     name='Volume MA (20)', line=dict(color='red', width=2)))
         
         fig_vol.update_layout(
             title='Trading Volume',
